@@ -516,11 +516,13 @@ func (h *handlers) RegisterCourses(c echo.Context) error {
 			UserID:   userID,
 		}
 	}
-	query = "INSERT INTO `registrations` (`course_id`, `user_id`) VALUES (:course_id, :user_id) ON DUPLICATE KEY UPDATE `course_id` = VALUES(`course_id`), `user_id` = VALUES(`user_id`)"
-	_, err = tx.NamedExec(query, registrations)
-	if err != nil {
-		c.Logger().Error(err)
-		return c.NoContent(http.StatusInternalServerError)
+	if len(registrations) != 0 {
+		query = "INSERT INTO `registrations` (`course_id`, `user_id`) VALUES (:course_id, :user_id) ON DUPLICATE KEY UPDATE `course_id` = VALUES(`course_id`), `user_id` = VALUES(`user_id`)"
+		_, err = tx.NamedExec(query, registrations)
+		if err != nil {
+			c.Logger().Error(err)
+			return c.NoContent(http.StatusInternalServerError)
+		}
 	}
 
 	if err = tx.Commit(); err != nil {
@@ -1488,8 +1490,30 @@ func (h *handlers) AddAnnouncement(c echo.Context) error {
 		return c.NoContent(http.StatusInternalServerError)
 	}
 
-	for _, user := range targets {
-		if _, err := tx.Exec("INSERT INTO `unread_announcements` (`announcement_id`, `user_id`) VALUES (?, ?)", req.ID, user.ID); err != nil {
+	/*
+		for _, user := range targets {
+			if _, err := tx.Exec("INSERT INTO `unread_announcements` (`announcement_id`, `user_id`) VALUES (?, ?)", req.ID, user.ID); err != nil {
+				c.Logger().Error(err)
+				return c.NoContent(http.StatusInternalServerError)
+			}
+		}
+	*/
+	type UnreadAnnouncement struct {
+		AnnouncementID string `db:"announcement_id"`
+		UserID         string `db:"user_id"`
+		IsDeleted      bool   `db:"is_deleted"`
+	}
+	uas := make([]UnreadAnnouncement, len(targets))
+	for i, user := range targets {
+		uas[i] = UnreadAnnouncement{
+			AnnouncementID: req.ID,
+			UserID:         user.ID,
+		}
+	}
+	if len(uas) != 0 {
+		query = "INSERT INTO `unread_announcements` (`announcement_id`, `user_id`) VALUES (:announcement_id, :user_id)"
+		_, err = tx.NamedExec(query, uas)
+		if err != nil {
 			c.Logger().Error(err)
 			return c.NoContent(http.StatusInternalServerError)
 		}

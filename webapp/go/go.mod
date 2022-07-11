@@ -19,6 +19,7 @@ require (
 	github.com/labstack/gommon v0.3.0 // indirect
 	github.com/mattn/go-colorable v0.1.8 // indirect
 	github.com/mattn/go-isatty v0.0.12 // indirect
+	github.com/plainbanana/echo-pprof v0.2.0 // indirect
 	github.com/valyala/bytebufferpool v1.0.0 // indirect
 	github.com/valyala/fasttemplate v1.2.1 // indirect
 	golang.org/x/net v0.0.0-20210405180319-a5a99cb37ef4 // indirect

@@ -2,7 +2,9 @@ package main
 
 import (
 	"archive/zip"
+	"bytes"
 	"database/sql"
+	"encoding/gob"
 	"errors"
 	"fmt"
 	"io"
@@ -690,7 +692,8 @@ func (h *handlers) GetGrades(c echo.Context) error {
 	// 一つでも修了した科目がある学生のGPA一覧
 	var gpas []float64
 	if x, found := gocache.Get("GPA"); found {
-		gpas = x.([]float64)
+		buf := bytes.NewBuffer(x.([]byte))
+		_ = gob.NewDecoder(buf).Decode(&gpas)
 	} else {
 		query = "SELECT IFNULL(SUM(`submissions`.`score` * `courses`.`credit`), 0) / 100 / `credits`.`credits` AS `gpa`" +
 			" FROM `users`" +
@@ -711,7 +714,9 @@ func (h *handlers) GetGrades(c echo.Context) error {
 			c.Logger().Error(err)
 			return c.NoContent(http.StatusInternalServerError)
 		}
-		gocache.Set("GPA", gpas, 100*time.Millisecond)
+		buf := bytes.NewBuffer(nil)
+		_ = gob.NewEncoder(buf).Encode(&h)
+		gocache.Set("GPA", buf.Bytes(), 100*time.Millisecond)
 	}
 	res := GetGradeResponse{
 		Summary: Summary{

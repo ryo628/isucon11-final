@@ -373,12 +373,25 @@ func (h *handlers) GetRegisteredCourses(c echo.Context) error {
 	}
 	defer tx.Rollback()
 
-	var courses []Course
-	query := "SELECT `courses`.*" +
+	type X struct {
+		ID        string    `db:"id"`
+		Name      string    `db:"name"`
+		Period    uint8     `db:"period"`
+		DayOfWeek DayOfWeek `db:"day_of_week"`
+		TName     string    `db:"teachername"`
+	}
+	var courses []X
+	query := "SELECT `users`.`name` AS teachername, `courses`.`id`, `courses`.`name`, `courses`.`period`, `courses`.`day_of_week`" +
 		" FROM `courses`" +
 		" JOIN `registrations` ON `courses`.`id` = `registrations`.`course_id`" +
+		" JOIN `users` ON `users`.`id` = `courses`.`teacher_id`" +
 		" WHERE `courses`.`status` != ? AND `registrations`.`user_id` = ?"
 	if err := tx.Select(&courses, query, StatusClosed, userID); err != nil {
+		c.Logger().Error(err)
+		return c.NoContent(http.StatusInternalServerError)
+	}
+
+	if err := tx.Commit(); err != nil {
 		c.Logger().Error(err)
 		return c.NoContent(http.StatusInternalServerError)
 	}
@@ -386,24 +399,14 @@ func (h *handlers) GetRegisteredCourses(c echo.Context) error {
 	// 履修科目が0件の時は空配列を返却
 	res := make([]GetRegisteredCourseResponseContent, 0, len(courses))
 	for _, course := range courses {
-		var teacher User
-		if err := tx.Get(&teacher, "SELECT * FROM `users` WHERE `id` = ?", course.TeacherID); err != nil {
-			c.Logger().Error(err)
-			return c.NoContent(http.StatusInternalServerError)
-		}
 
 		res = append(res, GetRegisteredCourseResponseContent{
 			ID:        course.ID,
 			Name:      course.Name,
-			Teacher:   teacher.Name,
+			Teacher:   course.TName,
 			Period:    course.Period,
 			DayOfWeek: course.DayOfWeek,
 		})
-	}
-
-	if err := tx.Commit(); err != nil {
-		c.Logger().Error(err)
-		return c.NoContent(http.StatusInternalServerError)
 	}
 
 	return c.JSON(http.StatusOK, res)

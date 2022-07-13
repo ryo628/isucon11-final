@@ -13,6 +13,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/go-sql-driver/mysql"
 	"github.com/gorilla/sessions"
@@ -20,6 +21,7 @@ import (
 	"github.com/labstack/echo-contrib/session"
 	"github.com/labstack/echo/v4"
 	"github.com/labstack/echo/v4/middleware"
+	"github.com/patrickmn/go-cache"
 	echopprof "github.com/plainbanana/echo-pprof"
 	"golang.org/x/crypto/bcrypt"
 )
@@ -35,6 +37,8 @@ const (
 type handlers struct {
 	DB *sqlx.DB
 }
+
+var gocache = cache.New(5*time.Second, 10*time.Second)
 
 func main() {
 	e := echo.New()
@@ -685,26 +689,30 @@ func (h *handlers) GetGrades(c echo.Context) error {
 	// GPAの統計値
 	// 一つでも修了した科目がある学生のGPA一覧
 	var gpas []float64
-	query = "SELECT IFNULL(SUM(`submissions`.`score` * `courses`.`credit`), 0) / 100 / `credits`.`credits` AS `gpa`" +
-		" FROM `users`" +
-		" JOIN (" +
-		"     SELECT `users`.`id` AS `user_id`, SUM(`courses`.`credit`) AS `credits`" +
-		"     FROM `users`" +
-		"     JOIN `registrations` ON `users`.`id` = `registrations`.`user_id`" +
-		"     JOIN `courses` ON `registrations`.`course_id` = `courses`.`id` AND `courses`.`status` = ?" +
-		"     GROUP BY `users`.`id`" +
-		" ) AS `credits` ON `credits`.`user_id` = `users`.`id`" +
-		" JOIN `registrations` ON `users`.`id` = `registrations`.`user_id`" +
-		" JOIN `courses` ON `registrations`.`course_id` = `courses`.`id` AND `courses`.`status` = ?" +
-		" LEFT JOIN `classes` ON `courses`.`id` = `classes`.`course_id`" +
-		" LEFT JOIN `submissions` ON `users`.`id` = `submissions`.`user_id` AND `submissions`.`class_id` = `classes`.`id`" +
-		" WHERE `users`.`type` = ?" +
-		" GROUP BY `users`.`id`"
-	if err := h.DB.Select(&gpas, query, StatusClosed, StatusClosed, Student); err != nil {
-		c.Logger().Error(err)
-		return c.NoContent(http.StatusInternalServerError)
+	if x, found := gocache.Get("GPA"); found {
+		gpas = x.([]float64)
+	} else {
+		query = "SELECT IFNULL(SUM(`submissions`.`score` * `courses`.`credit`), 0) / 100 / `credits`.`credits` AS `gpa`" +
+			" FROM `users`" +
+			" JOIN (" +
+			"     SELECT `users`.`id` AS `user_id`, SUM(`courses`.`credit`) AS `credits`" +
+			"     FROM `users`" +
+			"     JOIN `registrations` ON `users`.`id` = `registrations`.`user_id`" +
+			"     JOIN `courses` ON `registrations`.`course_id` = `courses`.`id` AND `courses`.`status` = ?" +
+			"     GROUP BY `users`.`id`" +
+			" ) AS `credits` ON `credits`.`user_id` = `users`.`id`" +
+			" JOIN `registrations` ON `users`.`id` = `registrations`.`user_id`" +
+			" JOIN `courses` ON `registrations`.`course_id` = `courses`.`id` AND `courses`.`status` = ?" +
+			" LEFT JOIN `classes` ON `courses`.`id` = `classes`.`course_id`" +
+			" LEFT JOIN `submissions` ON `users`.`id` = `submissions`.`user_id` AND `submissions`.`class_id` = `classes`.`id`" +
+			" WHERE `users`.`type` = ?" +
+			" GROUP BY `users`.`id`"
+		if err := h.DB.Select(&gpas, query, StatusClosed, StatusClosed, Student); err != nil {
+			c.Logger().Error(err)
+			return c.NoContent(http.StatusInternalServerError)
+		}
+		gocache.Set("GPA", gpas, 100*time.Millisecond)
 	}
-
 	res := GetGradeResponse{
 		Summary: Summary{
 			Credits:   myCredits,

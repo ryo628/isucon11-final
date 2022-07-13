@@ -462,7 +462,7 @@ func (h *handlers) RegisterCourses(c echo.Context) error {
 
 		// すでに履修登録済みの科目は無視する
 		var count int
-		if err := tx.Get(&count, "SELECT COUNT(*) FROM `registrations` WHERE `course_id` = ? AND `user_id` = ?", course.ID, userID); err != nil {
+		if err := tx.Get(&count, "SELECT EXISTS(SELECT * FROM `registrations` WHERE `user_id` = ? AND `course_id` = ? limit 1)", userID, courseID); err != nil {
 			c.Logger().Error(err)
 			return c.NoContent(http.StatusInternalServerError)
 		}
@@ -1142,7 +1142,7 @@ func (h *handlers) SubmitAssignment(c echo.Context) error {
 	}
 
 	var registrationCount int
-	if err := tx.Get(&registrationCount, "SELECT COUNT(*) FROM `registrations` WHERE `user_id` = ? AND `course_id` = ? FOR SHARE", userID, courseID); err != nil {
+	if err := tx.Get(&registrationCount, "SELECT EXISTS(SELECT * FROM `registrations` WHERE `user_id` = ? AND `course_id` = ? limit 1 FOR SHARE)", userID, courseID); err != nil {
 		c.Logger().Error(err)
 		return c.NoContent(http.StatusInternalServerError)
 	}
@@ -1567,7 +1567,7 @@ func (h *handlers) GetAnnouncementDetail(c echo.Context) error {
 	}
 
 	var registrationCount int
-	if err := tx.Get(&registrationCount, "SELECT COUNT(*) FROM `registrations` WHERE `course_id` = ? AND `user_id` = ?", announcement.CourseID, userID); err != nil {
+	if err := tx.Get(&registrationCount, "SELECT EXISTS(SELECT * FROM `registrations` WHERE `user_id` = ? AND `course_id` = ? limit 1 FOR SHARE)", userID, announcement.CourseID); err != nil {
 		c.Logger().Error(err)
 		return c.NoContent(http.StatusInternalServerError)
 	}

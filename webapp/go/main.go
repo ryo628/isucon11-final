@@ -1191,8 +1191,6 @@ type Score struct {
 	Score    int    `json:"score"`
 }
 
-var UserIDCodeMap map[string]string
-
 // RegisterScores PUT /api/courses/:courseID/classes/:classID/assignments/scores 採点結果登録
 func (h *handlers) RegisterScores(c echo.Context) error {
 	classID := c.Param("classID")
@@ -1221,43 +1219,8 @@ func (h *handlers) RegisterScores(c echo.Context) error {
 		return c.String(http.StatusBadRequest, "Invalid format.")
 	}
 
-	/*
-		for _, score := range req {
-			if _, err := tx.Exec("UPDATE `submissions` JOIN `users` ON `users`.`id` = `submissions`.`user_id` SET `score` = ? WHERE `users`.`code` = ? AND `class_id` = ?", score.Score, score.UserCode, classID); err != nil {
-				c.Logger().Error(err)
-				return c.NoContent(http.StatusInternalServerError)
-			}
-		}
-	*/
-	if UserIDCodeMap == nil {
-		UserIDCodeMap = make(map[string]string)
-		var users []User
-		if err = tx.Select(&users, "SELECT * from `users`"); err != nil {
-			c.Logger().Error(err)
-			return c.NoContent(http.StatusInternalServerError)
-		}
-		for _, u := range users {
-			UserIDCodeMap[u.Code] = u.ID
-		}
-	}
-
-	type Submission struct {
-		UserID  string `db:"user_id"`
-		ClassID string `db:"class_id"`
-		Score   int    `db:"score"`
-	}
-	submissions := make([]Submission, len(req))
-	for i, score := range req {
-		submissions[i] = Submission{
-			UserID:  UserIDCodeMap[score.UserCode],
-			ClassID: classID,
-			Score:   score.Score,
-		}
-	}
-	if len(submissions) != 0 {
-		query := "INSERT INTO `submissions` (`user_id`, `class_id`, `score`, `file_name`) VALUES (:user_id, :class_id, :score, '') ON DUPLICATE KEY UPDATE `score` = VALUES(`score`)"
-		_, err = tx.NamedExec(query, submissions)
-		if err != nil {
+	for _, score := range req {
+		if _, err := tx.Exec("UPDATE `submissions` JOIN `users` ON `users`.`id` = `submissions`.`user_id` SET `score` = ? WHERE `users`.`code` = ? AND `class_id` = ?", score.Score, score.UserCode, classID); err != nil {
 			c.Logger().Error(err)
 			return c.NoContent(http.StatusInternalServerError)
 		}

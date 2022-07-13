@@ -715,7 +715,7 @@ func (h *handlers) GetGrades(c echo.Context) error {
 			return c.NoContent(http.StatusInternalServerError)
 		}
 		buf := bytes.NewBuffer(nil)
-		_ = gob.NewEncoder(buf).Encode(&h)
+		_ = gob.NewEncoder(buf).Encode(&gpas)
 		gocache.Set("GPA", buf.Bytes(), 100*time.Millisecond)
 	}
 	res := GetGradeResponse{

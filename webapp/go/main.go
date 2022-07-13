@@ -904,20 +904,48 @@ type GetCourseDetailResponse struct {
 	Teacher     string       `json:"teacher" db:"teacher"`
 }
 
+type GetCourseDetail struct {
+	ID          string
+	Code        string
+	Type        string
+	Name        string
+	Description string
+	Credit      uint8
+	Period      uint8
+	DayOfWeek   string
+	TeacherID   string
+	Keywords    string
+	Status      CourseStatus
+}
+type GetCourseDetailCache struct {
+	Course  map[string]GetCourseDetail
+	Teacher map[string]string
+}
+
+var CourseDetailCache GetCourseDetailCache
+
 // GetCourseDetail GET /api/courses/:courseID 科目詳細の取得
 func (h *handlers) GetCourseDetail(c echo.Context) error {
 	courseID := c.Param("courseID")
 
 	var res GetCourseDetailResponse
-	query := "SELECT `courses`.*, `users`.`name` AS `teacher`" +
-		" FROM `courses`" +
-		" JOIN `users` ON `courses`.`teacher_id` = `users`.`id`" +
-		" WHERE `courses`.`id` = ?"
-	if err := h.DB.Get(&res, query, courseID); err != nil && err != sql.ErrNoRows {
-		c.Logger().Error(err)
-		return c.NoContent(http.StatusInternalServerError)
-	} else if err == sql.ErrNoRows {
-		return c.String(http.StatusNotFound, "No such course.")
+	if course, ok := CourseDetailCache.Course[courseID]; ok {
+		if t, ok := CourseDetailCache.Teacher[courseID]; ok {
+			res = GetCourseDetailResponse{course.ID, course.Code, course.Type, course.Name, course.Description, course.Credit, course.Period, course.DayOfWeek, course.TeacherID, course.Keywords, course.Status, t}
+		}
+	} else {
+		query := "SELECT `courses`.*, `users`.`name` AS `teacher`" +
+			" FROM `courses`" +
+			" JOIN `users` ON `courses`.`teacher_id` = `users`.`id`" +
+			" WHERE `courses`.`id` = ?"
+		if err := h.DB.Get(&res, query, courseID); err != nil && err != sql.ErrNoRows {
+			c.Logger().Error(err)
+			return c.NoContent(http.StatusInternalServerError)
+		} else if err == sql.ErrNoRows {
+			return c.String(http.StatusNotFound, "No such course.")
+		}
+		CourseDetailCache.Course[courseID] = GetCourseDetail{res.ID, res.Code, res.Type, res.Name, res.Description, res.Credit, res.Period, res.DayOfWeek, res.TeacherID, res.Keywords, res.Status}
+		CourseDetailCache.Teacher[courseID] = res.Teacher
 	}
 
 	return c.JSON(http.StatusOK, res)
@@ -951,7 +979,7 @@ func (h *handlers) SetCourseStatus(c echo.Context) error {
 	if count == 0 {
 		return c.String(http.StatusNotFound, "No such course.")
 	}
-
+	delete(CourseDetailCache.Course, courseID)
 	if _, err := tx.Exec("UPDATE `courses` SET `status` = ? WHERE `id` = ?", req.Status, courseID); err != nil {
 		c.Logger().Error(err)
 		return c.NoContent(http.StatusInternalServerError)

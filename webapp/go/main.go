@@ -601,12 +601,42 @@ func (h *handlers) GetGrades(c echo.Context) error {
 	myCredits := 0
 	for _, course := range registeredCourses {
 		// 講義一覧の取得
-		var classes []Class
-		query = "SELECT *" +
-			" FROM `classes`" +
-			" WHERE `course_id` = ?" +
-			" ORDER BY `part` DESC"
-		if err := h.DB.Select(&classes, query, course.ID); err != nil {
+		// var classes []Class
+		// query = "SELECT *, COUNT(`sub1`.`id`) AS `submissionsCnt`" +
+		// 	" FROM `classes`" +
+		// 	" WHERE `course_id` = ?" +
+		// 	"JOIN `submissions` sub1" +
+		// 	"ON `submissions`.`class_id` = `classes`.`id`" +
+		// 	"JOIN `submissions` sub1" +
+		// 	"ON `submissions`.`class_id` = `classes`.`id`" +
+		// 	"GROUP BY `classes`.`id`" +
+		// 	" ORDER BY `part` DESC"
+		// if err := h.DB.Select(&classes, query, course.ID); err != nil {
+		// 	c.Logger().Error(err)
+		// 	return c.NoContent(http.StatusInternalServerError)
+		// }
+
+		type ClassWithScore struct {
+			ID               string        `db:"id"`
+			CourseID         string        `db:"course_id"`
+			Part             uint8         `db:"part"`
+			Title            string        `db:"title"`
+			Description      string        `db:"description"`
+			SubmissionClosed bool          `db:"submission_closed"`
+			SubmissionCnt    int           `db:"submission_cnt"`
+			score            sql.NullInt64 `db:"score"`
+		}
+		var classes []ClassWithScore
+		query = "SELECT `c`.*, COUNT(`s1`.`class_id`) AS submission_cnt, sub2.score AS score" +
+			" FROM `classes` AS `c`" +
+			" JOIN `submissions` s1" +
+			" ON `s1`.`class_id` = `c`.`id`" +
+			" JOIN `submissions` sub2" +
+			" ON `sub2`.`class_id` = `c`.`id` AND `sub2`.`user_id` = ?" +
+			" WHERE `c`.`course_id` = ?" +
+			" GROUP BY `c`.`id`, `sub2`.`user_id`" +
+			" ORDER BY `c`.`part` DESC"
+		if err := h.DB.Select(&classes, query, userID, course.ID); err != nil {
 			c.Logger().Error(err)
 			return c.NoContent(http.StatusInternalServerError)
 		}
@@ -615,33 +645,34 @@ func (h *handlers) GetGrades(c echo.Context) error {
 		classScores := make([]ClassScore, 0, len(classes))
 		var myTotalScore int
 		for _, class := range classes {
-			var submissionsCount int
-			if err := h.DB.Get(&submissionsCount, "SELECT COUNT(*) FROM `submissions` WHERE `class_id` = ?", class.ID); err != nil {
-				c.Logger().Error(err)
-				return c.NoContent(http.StatusInternalServerError)
-			}
+			// var submissionsCount int
+			// if err := h.DB.Get(&submissionsCount, "SELECT COUNT(*) FROM `submissions` WHERE `class_id` = ?", class.ID); err != nil {
+			// 	c.Logger().Error(err)
+			// 	return c.NoContent(http.StatusInternalServerError)
+			// }
 
-			var myScore sql.NullInt64
-			if err := h.DB.Get(&myScore, "SELECT `submissions`.`score` FROM `submissions` WHERE `user_id` = ? AND `class_id` = ?", userID, class.ID); err != nil && err != sql.ErrNoRows {
-				c.Logger().Error(err)
-				return c.NoContent(http.StatusInternalServerError)
-			} else if err == sql.ErrNoRows || !myScore.Valid {
+			// var myScore sql.NullInt64
+			// if err := h.DB.Get(&myScore, "SELECT `submissions`.`score` FROM `submissions` WHERE `user_id` = ? AND `class_id` = ?", userID, class.ID); err != nil && err != sql.ErrNoRows {
+			// 	c.Logger().Error(err)
+			// 	return c.NoContent(http.StatusInternalServerError)
+			// } else if err == sql.ErrNoRows || !myScore.Valid {
+			if !class.score.Valid {
 				classScores = append(classScores, ClassScore{
 					ClassID:    class.ID,
 					Part:       class.Part,
 					Title:      class.Title,
 					Score:      nil,
-					Submitters: submissionsCount,
+					Submitters: class.SubmissionCnt,
 				})
 			} else {
-				score := int(myScore.Int64)
+				score := int(class.score.Int64)
 				myTotalScore += score
 				classScores = append(classScores, ClassScore{
 					ClassID:    class.ID,
 					Part:       class.Part,
 					Title:      class.Title,
 					Score:      &score,
-					Submitters: submissionsCount,
+					Submitters: class.SubmissionCnt,
 				})
 			}
 		}

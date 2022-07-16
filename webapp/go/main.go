@@ -13,6 +13,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/go-sql-driver/mysql"
 	"github.com/gorilla/sessions"
@@ -20,6 +21,7 @@ import (
 	"github.com/labstack/echo-contrib/session"
 	"github.com/labstack/echo/v4"
 	"github.com/labstack/echo/v4/middleware"
+	"github.com/patrickmn/go-cache"
 	echopprof "github.com/plainbanana/echo-pprof"
 	"golang.org/x/crypto/bcrypt"
 )
@@ -35,6 +37,8 @@ const (
 type handlers struct {
 	DB *sqlx.DB
 }
+
+var gocache = cache.New(5*time.Second, 10*time.Second)
 
 func main() {
 	e := echo.New()
@@ -1281,11 +1285,42 @@ func (h *handlers) RegisterScores(c echo.Context) error {
 		return c.String(http.StatusBadRequest, "Invalid format.")
 	}
 
+	type IDCode struct {
+		ID   string `db:"id"`
+		Code string `db:"code"`
+	}
+	type InsertSubmission struct {
+		UserID  string `db:"user_id"`
+		ClassID string `db:"class_id"`
+		Score   int    `db:"score"`
+	}
+	iss := []InsertSubmission{}
 	for _, score := range req {
-		if _, err := tx.Exec("UPDATE `submissions` JOIN `users` ON `users`.`id` = `submissions`.`user_id` SET `score` = ? WHERE `users`.`code` = ? AND `class_id` = ?", score.Score, score.UserCode, classID); err != nil {
-			c.Logger().Error(err)
-			return c.NoContent(http.StatusInternalServerError)
+		uid, found := gocache.Get("USERID_BY_CODE:" + score.UserCode)
+		if !found {
+			var idcodes []IDCode
+			if err := tx.Select(&idcodes, "SELECT `id`, `code` FROM `users`"); err != nil {
+				c.Logger().Error(err)
+				return c.NoContent(http.StatusInternalServerError)
+			}
+			for _, v := range idcodes {
+				gocache.Set("USERID_BY_CODE:"+v.Code, v.ID, 10*time.Minute)
+			}
+			uid, _ = gocache.Get("USERID_BY_CODE:" + score.UserCode)
 		}
+		iss = append(iss, InsertSubmission{
+			UserID:  uid.(string),
+			ClassID: classID,
+			Score:   score.Score,
+		})
+	}
+
+	query := "INSERT INTO `submissions` (`user_id`, `class_id`, `score`, `file_name`) VALUES (:user_id, :class_id, :score, '') AS `new`" +
+		" ON DUPLICATE KEY UPDATE `score` = `new`.`score`"
+	_, err = tx.NamedExec(query, iss)
+	if err != nil {
+		c.Logger().Error(err)
+		return c.NoContent(http.StatusInternalServerError)
 	}
 
 	if err := tx.Commit(); err != nil {

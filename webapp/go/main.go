@@ -1357,7 +1357,7 @@ func createSubmissionsZip(zipFilePath string, classID string, submissions []Subm
 	defer w.Close()
 
 	for _, submission := range submissions {
-		dat, err := os.ReadFile(AssignmentsDirectory + classID + "-" + submission.UserID + ".pdf")
+		r, err := os.Open(AssignmentsDirectory + classID + "-" + submission.UserID + ".pdf")
 		if err != nil {
 			return err
 		}
@@ -1365,7 +1365,7 @@ func createSubmissionsZip(zipFilePath string, classID string, submissions []Subm
 		if err != nil {
 			return err
 		}
-		if _, err = f.Write(dat); err != nil {
+		if _, err = io.Copy(f, r); err != nil {
 			return err
 		}
 	}

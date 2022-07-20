@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"net/url"
 	"os"
@@ -13,6 +14,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/go-sql-driver/mysql"
@@ -40,6 +42,16 @@ type handlers struct {
 
 var gocache = cache.New(5*time.Second, 10*time.Second)
 
+type SubmissionQueue struct {
+	UserID    string `db:"user_id"`
+	ClassID   string `db:"class_id"`
+	FileName  string `db:"file_name"`
+	WaitGroup *sync.WaitGroup
+}
+
+var chSubmissionQueues = make(chan SubmissionQueue, 10000)
+var db *sqlx.DB
+
 func main() {
 	e := echo.New()
 	e.Debug = GetEnv("DEBUG", "") == "true"
@@ -52,8 +64,45 @@ func main() {
 	e.Use(middleware.Recover())
 	e.Use(session.Middleware(sessions.NewCookieStore([]byte("trapnomura"))))
 
-	db, _ := GetDB(false)
+	db, _ = GetDB(false)
 	db.SetMaxOpenConns(25)
+
+	// タイムアウト防止の為bulk insertするgoroutineを複数生成
+	for i := 0; i < 3; i++ {
+		go func() {
+			for {
+				var receives []SubmissionQueue
+
+				// time.AfterだけQueueを集めて処理したい
+			waitQueue:
+				for {
+					select {
+					case queue := <-chSubmissionQueues:
+						receives = append(receives, queue)
+					case <-time.After(10 * time.Millisecond):
+						break waitQueue
+					}
+				}
+
+				if len(receives) > 0 {
+					log.Println("BULK INSERT length ver2 ", len(receives))
+					// TODO: ファイル名が長めなのでバルクで集めすぎるとSQLの最大長を超える可能性もあるかもしれない
+					_, err := db.NamedExec(
+						"INSERT INTO `submissions` (`user_id`, `class_id`, `file_name`) VALUES (:user_id, :class_id, :file_name) ON DUPLICATE KEY UPDATE `file_name` = VALUES(`file_name`)",
+						receives,
+					)
+					if err != nil {
+						// TODO: errorを正しく把握してresponseに反映する必要性は有るかどうか
+						log.Println("BULK ERROR", err)
+					}
+					// INSERT後にwait groupに終了ステータスを反映
+					for _, v := range receives {
+						v.WaitGroup.Done()
+					}
+				}
+			}
+		}()
+	}
 
 	h := &handlers{
 		DB: db,
@@ -1161,10 +1210,15 @@ func (h *handlers) SubmitAssignment(c echo.Context) error {
 		return c.String(http.StatusBadRequest, "Submission has been closed for this class.")
 	}
 
-	if _, err := h.DB.Exec("INSERT INTO `submissions` (`user_id`, `class_id`, `file_name`) VALUES (?, ?, ?) ON DUPLICATE KEY UPDATE `file_name` = VALUES(`file_name`)", userID, classID, header.Filename); err != nil {
-		c.Logger().Error(err)
-		return c.NoContent(http.StatusInternalServerError)
+	var wg sync.WaitGroup
+	wg.Add(1)
+	chSubmissionQueues <- SubmissionQueue{
+		UserID:    userID,
+		ClassID:   classID,
+		FileName:  header.Filename,
+		WaitGroup: &wg,
 	}
+	wg.Wait()
 
 	dst := AssignmentsDirectory + classID + "-" + userID + ".pdf"
 	w, err := os.Create(dst)

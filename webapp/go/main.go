@@ -28,7 +28,7 @@ import (
 
 const (
 	SQLDirectory              = "../sql/"
-	AssignmentsDirectory      = "../assignments/"
+	AssignmentsDirectory      = "/tmpfs/isucon/assignments/"
 	InitDataDirectory         = "../data/"
 	SessionName               = "isucholar_go"
 	mysqlErrNumDuplicateEntry = 1062
@@ -118,6 +118,10 @@ func (h *handlers) Initialize(c echo.Context) error {
 			c.Logger().Error(err)
 			return c.NoContent(http.StatusInternalServerError)
 		}
+	}
+	if err := exec.Command("mkdir", "-p", AssignmentsDirectory).Run(); err != nil {
+		c.Logger().Error(err)
+		return c.NoContent(http.StatusInternalServerError)
 	}
 
 	if err := exec.Command("rm", "-rf", AssignmentsDirectory).Run(); err != nil {

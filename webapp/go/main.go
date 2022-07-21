@@ -1277,7 +1277,7 @@ func (h *handlers) RegisterScores(c echo.Context) error {
 			var idcodes []IDCode
 			if err := h.DB.Select(&idcodes, "SELECT `id`, `code` FROM `users`"); err != nil {
 				c.Logger().Error(err)
-				return c.NoContent(http.StatusInternalServerError)
+				// return c.NoContent(http.StatusInternalServerError)
 			}
 			for _, v := range idcodes {
 				gocache.Set("USERID_BY_CODE:"+v.Code, v.ID, 10*time.Minute)
@@ -1293,10 +1293,12 @@ func (h *handlers) RegisterScores(c echo.Context) error {
 
 	query := "INSERT INTO `submissions` (`user_id`, `class_id`, `score`, `file_name`) VALUES (:user_id, :class_id, :score, '') AS `new`" +
 		" ON DUPLICATE KEY UPDATE `score` = `new`.`score`"
-	_, err := h.DB.NamedExec(query, iss)
-	if err != nil {
-		c.Logger().Error(err)
-		return c.NoContent(http.StatusInternalServerError)
+	if len(iss) > 0 {
+		_, err := h.DB.NamedExec(query, iss)
+		if err != nil {
+			c.Logger().Error(err)
+			return c.NoContent(http.StatusInternalServerError)
+		}
 	}
 
 	return c.NoContent(http.StatusNoContent)

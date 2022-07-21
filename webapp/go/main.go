@@ -68,7 +68,7 @@ func main() {
 	db.SetMaxOpenConns(25)
 
 	// タイムアウト防止の為bulk insertするgoroutineを複数生成
-	for i := 0; i < 3; i++ {
+	for i := 0; i < 4; i++ {
 		go func() {
 			for {
 				var receives []SubmissionQueue
@@ -85,7 +85,6 @@ func main() {
 				}
 
 				if len(receives) > 0 {
-					log.Println("BULK INSERT length ver2 ", len(receives))
 					// TODO: ファイル名が長めなのでバルクで集めすぎるとSQLの最大長を超える可能性もあるかもしれない
 					_, err := db.NamedExec(
 						"INSERT INTO `submissions` (`user_id`, `class_id`, `file_name`) VALUES (:user_id, :class_id, :file_name) ON DUPLICATE KEY UPDATE `file_name` = VALUES(`file_name`)",

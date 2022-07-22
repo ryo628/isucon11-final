@@ -24,7 +24,6 @@ import (
 	"github.com/labstack/echo/v4"
 	"github.com/labstack/echo/v4/middleware"
 	"github.com/patrickmn/go-cache"
-	echopprof "github.com/plainbanana/echo-pprof"
 	"golang.org/x/crypto/bcrypt"
 )
 
@@ -56,11 +55,12 @@ var dbAnother *sqlx.DB
 
 func main() {
 	e := echo.New()
-	e.Debug = GetEnv("DEBUG", "") == "true"
+	// e.Debug = GetEnv("DEBUG", "") == "true"
+	e.Debug = false
 	e.Server.Addr = fmt.Sprintf(":%v", GetEnv("PORT", "7000"))
 	e.HideBanner = true
 
-	echopprof.Wrap(e)
+	// echopprof.Wrap(e)
 
 	e.Use(middleware.Logger())
 	e.Use(middleware.Recover())

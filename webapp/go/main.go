@@ -37,7 +37,8 @@ const (
 )
 
 type handlers struct {
-	DB *sqlx.DB
+	DB        *sqlx.DB
+	DBAnother *sqlx.DB
 }
 
 var gocache = cache.New(5*time.Second, 10*time.Second)
@@ -51,6 +52,7 @@ type SubmissionQueue struct {
 
 var chSubmissionQueues = make(chan SubmissionQueue, 10000)
 var db *sqlx.DB
+var dbAnother *sqlx.DB
 
 func main() {
 	e := echo.New()
@@ -65,7 +67,10 @@ func main() {
 	e.Use(session.Middleware(sessions.NewCookieStore([]byte("trapnomura"))))
 
 	db, _ = GetDB(false)
-	db.SetMaxOpenConns(25)
+	db.SetMaxOpenConns(13)
+
+	dbAnother, _ = GetAnotherDB(false)
+	dbAnother.SetMaxOpenConns(12)
 
 	// タイムアウト防止の為bulk insertするgoroutineを複数生成
 	for i := 0; i < 4; i++ {
@@ -104,7 +109,8 @@ func main() {
 	}
 
 	h := &handlers{
-		DB: db,
+		DB:        db,
+		DBAnother: dbAnother,
 	}
 
 	e.POST("/initialize", h.Initialize)
@@ -150,6 +156,7 @@ type InitializeResponse struct {
 // Initialize POST /initialize 初期化エンドポイント
 func (h *handlers) Initialize(c echo.Context) error {
 	dbForInit, _ := GetDB(true)
+	dbForInitAnother, _ := GetAnotherDB(true)
 
 	files := []string{
 		"1_schema.sql",
@@ -162,10 +169,24 @@ func (h *handlers) Initialize(c echo.Context) error {
 			c.Logger().Error(err)
 			return c.NoContent(http.StatusInternalServerError)
 		}
-		if _, err := dbForInit.Exec(string(data)); err != nil {
-			c.Logger().Error(err)
-			return c.NoContent(http.StatusInternalServerError)
-		}
+
+		var wg sync.WaitGroup
+		wg.Add(2)
+		go func(wg *sync.WaitGroup, data string) {
+			if _, err := dbForInit.Exec(data); err != nil {
+				c.Logger().Error(err)
+				// return c.NoContent(http.StatusInternalServerError)
+			}
+			wg.Done()
+		}(&wg, string(data))
+		go func(wg *sync.WaitGroup, data string) {
+			if _, err := dbForInitAnother.Exec(data); err != nil {
+				c.Logger().Error(err)
+				// return c.NoContent(http.StatusInternalServerError)
+			}
+			wg.Done()
+		}(&wg, string(data))
+		wg.Wait()
 	}
 	if err := exec.Command("mkdir", "-p", AssignmentsDirectory).Run(); err != nil {
 		c.Logger().Error(err)
@@ -960,8 +981,20 @@ func (h *handlers) AddCourse(c echo.Context) error {
 	}
 
 	courseID := newULID()
+
+	var wg sync.WaitGroup
+	wg.Add(1)
+
+	go func(wg *sync.WaitGroup, courseID string, req AddCourseRequest, h *handlers) {
+		_, _ = h.DBAnother.Exec("INSERT INTO `courses` (`id`, `code`, `type`, `name`, `description`, `credit`, `period`, `day_of_week`, `teacher_id`, `keywords`) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+			courseID, req.Code, req.Type, req.Name, req.Description, req.Credit, req.Period, req.DayOfWeek, userID, req.Keywords)
+		wg.Done()
+	}(&wg, courseID, req, h)
+
 	_, err = h.DB.Exec("INSERT INTO `courses` (`id`, `code`, `type`, `name`, `description`, `credit`, `period`, `day_of_week`, `teacher_id`, `keywords`) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
 		courseID, req.Code, req.Type, req.Name, req.Description, req.Credit, req.Period, req.DayOfWeek, userID, req.Keywords)
+
+	wg.Wait()
 	if err != nil {
 		if mysqlErr, ok := err.(*mysql.MySQLError); ok && mysqlErr.Number == uint16(mysqlErrNumDuplicateEntry) {
 			var course Course
@@ -1420,7 +1453,7 @@ func (h *handlers) GetAnnouncementList(c echo.Context) error {
 		Unread bool   `db:"unread"`
 	}
 	var unreads []UnreadAnnouncements
-	if err := h.DB.Select(&unreads, query0, args0...); err != nil {
+	if err := h.DBAnother.Select(&unreads, query0, args0...); err != nil {
 		c.Logger().Error(err)
 		return c.NoContent(http.StatusInternalServerError)
 	}
@@ -1446,7 +1479,7 @@ func (h *handlers) GetAnnouncementList(c echo.Context) error {
 		}
 
 		var res []AnnouncementWithoutDetail
-		if err := h.DB.Select(&res, q, args...); err != nil {
+		if err := h.DBAnother.Select(&res, q, args...); err != nil {
 			c.Logger().Error(err)
 			return c.NoContent(http.StatusInternalServerError)
 		}
@@ -1463,7 +1496,7 @@ func (h *handlers) GetAnnouncementList(c echo.Context) error {
 	}
 
 	var unreadCount int
-	if err := h.DB.Get(&unreadCount, "SELECT COUNT(*) FROM `unread_announcements` WHERE `user_id` = ? AND NOT `is_deleted`", userID); err != nil {
+	if err := h.DBAnother.Get(&unreadCount, "SELECT COUNT(*) FROM `unread_announcements` WHERE `user_id` = ? AND NOT `is_deleted`", userID); err != nil {
 		c.Logger().Error(err)
 		return c.NoContent(http.StatusInternalServerError)
 	}
@@ -1525,7 +1558,7 @@ func (h *handlers) AddAnnouncement(c echo.Context) error {
 	}
 
 	var count int
-	if err := h.DB.Get(&count, "SELECT COUNT(*) FROM `courses` WHERE `id` = ?", req.CourseID); err != nil {
+	if err := h.DBAnother.Get(&count, "SELECT COUNT(*) FROM `courses` WHERE `id` = ?", req.CourseID); err != nil {
 		c.Logger().Error(err)
 		return c.NoContent(http.StatusInternalServerError)
 	}
@@ -1556,11 +1589,11 @@ func (h *handlers) AddAnnouncement(c echo.Context) error {
 		IsDeleted      bool   `db:"is_deleted"`
 	}
 
-	if _, err := h.DB.Exec("INSERT INTO `announcements` (`id`, `course_id`, `title`, `message`) VALUES (?, ?, ?, ?)",
+	if _, err := h.DBAnother.Exec("INSERT INTO `announcements` (`id`, `course_id`, `title`, `message`) VALUES (?, ?, ?, ?)",
 		req.ID, req.CourseID, req.Title, req.Message); err != nil {
 		if mysqlErr, ok := err.(*mysql.MySQLError); ok && mysqlErr.Number == uint16(mysqlErrNumDuplicateEntry) {
 			var announcement Announcement
-			if err := h.DB.Get(&announcement, "SELECT * FROM `announcements` WHERE `id` = ?", req.ID); err != nil {
+			if err := h.DBAnother.Get(&announcement, "SELECT * FROM `announcements` WHERE `id` = ?", req.ID); err != nil {
 				c.Logger().Error(err)
 				return c.NoContent(http.StatusInternalServerError)
 			}
@@ -1582,7 +1615,7 @@ func (h *handlers) AddAnnouncement(c echo.Context) error {
 	}
 	if len(uas) != 0 {
 		query = "INSERT INTO `unread_announcements` (`announcement_id`, `user_id`) VALUES (:announcement_id, :user_id)"
-		_, err := h.DB.NamedExec(query, uas)
+		_, err := h.DBAnother.NamedExec(query, uas)
 		if err != nil {
 			c.Logger().Error(err)
 			return c.NoContent(http.StatusInternalServerError)
@@ -1618,7 +1651,7 @@ func (h *handlers) GetAnnouncementDetail(c echo.Context) error {
 		" JOIN `unread_announcements` ON `unread_announcements`.`announcement_id` = `announcements`.`id`" +
 		" WHERE `announcements`.`id` = ?" +
 		" AND `unread_announcements`.`user_id` = ?"
-	if err := h.DB.Get(&announcement, query, announcementID, userID); err != nil && err != sql.ErrNoRows {
+	if err := h.DBAnother.Get(&announcement, query, announcementID, userID); err != nil && err != sql.ErrNoRows {
 		c.Logger().Error(err)
 		return c.NoContent(http.StatusInternalServerError)
 	} else if err == sql.ErrNoRows {
@@ -1634,7 +1667,7 @@ func (h *handlers) GetAnnouncementDetail(c echo.Context) error {
 		return c.String(http.StatusNotFound, "No such announcement.")
 	}
 
-	if _, err := h.DB.Exec("UPDATE `unread_announcements` SET `is_deleted` = true WHERE `announcement_id` = ? AND `user_id` = ?", announcementID, userID); err != nil {
+	if _, err := h.DBAnother.Exec("UPDATE `unread_announcements` SET `is_deleted` = true WHERE `announcement_id` = ? AND `user_id` = ?", announcementID, userID); err != nil {
 		c.Logger().Error(err)
 		return c.NoContent(http.StatusInternalServerError)
 	}

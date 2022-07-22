@@ -73,7 +73,7 @@ func main() {
 	dbAnother.SetMaxOpenConns(12)
 
 	// タイムアウト防止の為bulk insertするgoroutineを複数生成
-	for i := 0; i < 4; i++ {
+	for i := 0; i < 5; i++ {
 		go func() {
 			for {
 				var receives []SubmissionQueue

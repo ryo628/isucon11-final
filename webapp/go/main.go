@@ -67,10 +67,10 @@ func main() {
 	e.Use(session.Middleware(sessions.NewCookieStore([]byte("trapnomura"))))
 
 	db, _ = GetDB(false)
-	db.SetMaxOpenConns(13)
+	db.SetMaxOpenConns(20)
 
 	dbAnother, _ = GetAnotherDB(false)
-	dbAnother.SetMaxOpenConns(12)
+	dbAnother.SetMaxOpenConns(20)
 
 	// タイムアウト防止の為bulk insertするgoroutineを複数生成
 	for i := 0; i < 5; i++ {

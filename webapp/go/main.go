@@ -1022,14 +1022,14 @@ func (h *handlers) AddClass(c echo.Context) error {
 	}
 	defer tx.Rollback()
 
-	var course Course
-	if err := tx.Get(&course, "SELECT * FROM `courses` WHERE `id` = ? FOR SHARE", courseID); err != nil && err != sql.ErrNoRows {
+	var status CourseStatus
+	if err := tx.Get(&status, "SELECT status FROM `courses` WHERE `id` = ? FOR SHARE", courseID); err != nil && err != sql.ErrNoRows {
 		c.Logger().Error(err)
 		return c.NoContent(http.StatusInternalServerError)
 	} else if err == sql.ErrNoRows {
 		return c.String(http.StatusNotFound, "No such course.")
 	}
-	if course.Status != StatusInProgress {
+	if status != StatusInProgress {
 		return c.String(http.StatusBadRequest, "This course is not in-progress.")
 	}
 

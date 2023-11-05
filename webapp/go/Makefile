@@ -7,7 +7,7 @@ all: clean build ## Cleanup and Build
 
 .PHONY: build
 build: $(GO_FILES) ## Build executable files
-	@$(COMPILER) build -o $(DEST) -ldflags "-s -w"
+	CGO_ENABLED=0 go build -o $(DEST) -ldflags "-s -w"
 
 .PHONY: clean
 clean: ## Cleanup files

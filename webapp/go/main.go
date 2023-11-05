@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	echopprof "github.com/plainbanana/echo-pprof"
 	"io"
 	"net/http"
 	"net/url"
@@ -43,6 +44,8 @@ func main() {
 	e.Use(middleware.Logger())
 	e.Use(middleware.Recover())
 	e.Use(session.Middleware(sessions.NewCookieStore([]byte("trapnomura"))))
+
+	echopprof.Wrap(e)
 
 	db, _ := GetDB(false)
 	db.SetMaxOpenConns(10)

@@ -27,7 +27,7 @@ import (
 
 const (
 	SQLDirectory              = "../sql/"
-	AssignmentsDirectory      = "../assignments/"
+	AssignmentsDirectory      = "/dev/shm/tmp/"
 	InitDataDirectory         = "../data/"
 	SessionName               = "isucholar_go"
 	mysqlErrNumDuplicateEntry = 1062
@@ -138,6 +138,13 @@ func (h *handlers) Initialize(c echo.Context) error {
 	}
 
 	redisClient.FlushAll(ctx)
+
+	if err := exec.Command(
+		"rm",
+		"-rf /dev/shm/tmp",
+	).Run(); err != nil {
+		c.Logger().Warn("!!!  rm /dev/shm", err)
+	}
 
 	res := InitializeResponse{
 		Language: "go",

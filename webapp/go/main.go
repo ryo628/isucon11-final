@@ -393,8 +393,8 @@ func (h *handlers) GetRegisteredCourses(c echo.Context) error {
 	// 履修科目が0件の時は空配列を返却
 	res := make([]GetRegisteredCourseResponseContent, 0, len(courses))
 	for _, course := range courses {
-		var teacher User
-		if err := h.DB.Get(&teacher, "SELECT * FROM `users` WHERE `id` = ?", course.TeacherID); err != nil {
+		var teacherName string
+		if err := h.DB.Get(&teacherName, "SELECT name FROM `users` WHERE `id` = ?", course.TeacherID); err != nil {
 			c.Logger().Error(err)
 			return c.NoContent(http.StatusInternalServerError)
 		}
@@ -402,7 +402,7 @@ func (h *handlers) GetRegisteredCourses(c echo.Context) error {
 		res = append(res, GetRegisteredCourseResponseContent{
 			ID:        course.ID,
 			Name:      course.Name,
-			Teacher:   teacher.Name,
+			Teacher:   teacherName,
 			Period:    course.Period,
 			DayOfWeek: course.DayOfWeek,
 		})

@@ -25,7 +25,7 @@ import (
 
 const (
 	SQLDirectory              = "../sql/"
-	AssignmentsDirectory      = "../assignments/"
+	AssignmentsDirectory      = "/dev/shm/assignments/"
 	InitDataDirectory         = "../data/"
 	SessionName               = "isucholar_go"
 	mysqlErrNumDuplicateEntry = 1062

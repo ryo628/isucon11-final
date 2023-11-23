@@ -24,7 +24,7 @@ import (
 
 const (
 	SQLDirectory              = "../sql/"
-	AssignmentsDirectory      = "../assignments/"
+	AssignmentsDirectory      = "/dev/shm/tmp/"
 	InitDataDirectory         = "../data/"
 	SessionName               = "isucholar_go"
 	mysqlErrNumDuplicateEntry = 1062
@@ -119,6 +119,13 @@ func (h *handlers) Initialize(c echo.Context) error {
 	if err := exec.Command("cp", "-r", InitDataDirectory, AssignmentsDirectory).Run(); err != nil {
 		c.Logger().Error(err)
 		return c.NoContent(http.StatusInternalServerError)
+	}
+
+	if err := exec.Command(
+		"rm",
+		"-rf /dev/shm/tmp",
+	).Run(); err != nil {
+		c.Logger().Warn("!!!  rm /dev/shm", err)
 	}
 
 	res := InitializeResponse{
@@ -570,89 +577,113 @@ func (h *handlers) GetGrades(c echo.Context) error {
 		return c.NoContent(http.StatusInternalServerError)
 	}
 
-	// 科目毎の成績計算処理
-	courseResults := make([]CourseResult, 0, len(registeredCourses))
+	// course IDs
+	var courseIDs []string
+	registeredcoursesMap := map[string]Course{}
+	for _, c := range registeredCourses {
+		courseIDs = append(courseIDs, c.ID)
+		registeredcoursesMap[c.ID] = c
+	}
+
+	// 講義一覧の取得
+	var registeredClasses []Class
+	query = "SELECT *" +
+		" FROM `classes`" +
+		" WHERE `course_id` IN (?)" +
+		" ORDER BY `part` DESC"
+	query, params, err := sqlx.In(query, courseIDs)
+	if err != nil {
+		c.Logger().Error(err)
+		return c.NoContent(http.StatusInternalServerError)
+	}
+	if err := h.DB.Select(&registeredClasses, query, params...); err != nil {
+		c.Logger().Error(err)
+		return c.NoContent(http.StatusInternalServerError)
+	}
+
+	// class IDs
+	var classIDs []string
+	registeredClassesMap := map[string]Class{}
+	for _, c := range registeredClasses {
+		classIDs = append(classIDs, c.ID)
+		registeredClassesMap[c.ID] = c
+	}
+
+	// 課題一覧の取得
+	var submissions []Submission2
+	query = "SELECT * FROM `submissions` WHERE `class_id` IN (?)"
+	query, params, err = sqlx.In(query, classIDs)
+	if err != nil {
+		c.Logger().Error(err)
+		return c.NoContent(http.StatusInternalServerError)
+	}
+	if err := h.DB.Select(&submissions, query, params...); err != nil && err != sql.ErrNoRows {
+		c.Logger().Error(err)
+		return c.NoContent(http.StatusInternalServerError)
+	}
+
+	submissionCoutMap := map[string]int{}
+	for _, s := range submissions {
+		submissionCoutMap[s.ClassID]++
+	}
+
+	classScores := map[string][]ClassScore{}
+	totalScores := map[string]map[string]int{}
+	for _, s := range submissions {
+		courseID := registeredClassesMap[s.ClassID].CourseID
+		if _, ok := totalScores[courseID]; !ok {
+			totalScores[courseID] = map[string]int{}
+		}
+		totalScores[courseID][s.UserID] += int(s.Score.Int64)
+
+		if s.UserID == userID {
+			c := registeredClassesMap[s.ClassID]
+			cs := ClassScore{
+				ClassID:    c.ID,
+				Part:       c.Part,
+				Title:      c.Title,
+				Submitters: submissionCoutMap[s.ClassID],
+			}
+			if s.Score.Valid {
+				s := int(s.Score.Int64)
+				cs.Score = &s
+			}
+			classScores[c.CourseID] = append(classScores[c.CourseID], cs)
+		}
+	}
+
+	var courseResults []CourseResult
 	myGPA := 0.0
 	myCredits := 0
-	for _, course := range registeredCourses {
-		// 講義一覧の取得
-		var classes []Class
-		query = "SELECT *" +
-			" FROM `classes`" +
-			" WHERE `course_id` = ?" +
-			" ORDER BY `part` DESC"
-		if err := h.DB.Select(&classes, query, course.ID); err != nil {
-			c.Logger().Error(err)
-			return c.NoContent(http.StatusInternalServerError)
-		}
-
-		// 講義毎の成績計算処理
-		classScores := make([]ClassScore, 0, len(classes))
-		var myTotalScore int
-		for _, class := range classes {
-			var submissionsCount int
-			if err := h.DB.Get(&submissionsCount, "SELECT COUNT(*) FROM `submissions` WHERE `class_id` = ?", class.ID); err != nil {
-				c.Logger().Error(err)
-				return c.NoContent(http.StatusInternalServerError)
-			}
-
-			var myScore sql.NullInt64
-			if err := h.DB.Get(&myScore, "SELECT `submissions`.`score` FROM `submissions` WHERE `user_id` = ? AND `class_id` = ?", userID, class.ID); err != nil && err != sql.ErrNoRows {
-				c.Logger().Error(err)
-				return c.NoContent(http.StatusInternalServerError)
-			} else if err == sql.ErrNoRows || !myScore.Valid {
-				classScores = append(classScores, ClassScore{
-					ClassID:    class.ID,
-					Part:       class.Part,
-					Title:      class.Title,
-					Score:      nil,
-					Submitters: submissionsCount,
-				})
-			} else {
-				score := int(myScore.Int64)
-				myTotalScore += score
-				classScores = append(classScores, ClassScore{
-					ClassID:    class.ID,
-					Part:       class.Part,
-					Title:      class.Title,
-					Score:      &score,
-					Submitters: submissionsCount,
-				})
-			}
-		}
-
-		// この科目を履修している学生のTotalScore一覧を取得
+	for _, c := range registeredCourses {
+		myTotalScore := totalScores[c.ID][userID]
 		var totals []int
-		query := "SELECT IFNULL(SUM(`submissions`.`score`), 0) AS `total_score`" +
-			" FROM `users`" +
-			" JOIN `registrations` ON `users`.`id` = `registrations`.`user_id`" +
-			" JOIN `courses` ON `registrations`.`course_id` = `courses`.`id`" +
-			" LEFT JOIN `classes` ON `courses`.`id` = `classes`.`course_id`" +
-			" LEFT JOIN `submissions` ON `users`.`id` = `submissions`.`user_id` AND `submissions`.`class_id` = `classes`.`id`" +
-			" WHERE `courses`.`id` = ?" +
-			" GROUP BY `users`.`id`"
-		if err := h.DB.Select(&totals, query, course.ID); err != nil {
-			c.Logger().Error(err)
-			return c.NoContent(http.StatusInternalServerError)
+		for _, v := range totalScores[c.ID] {
+			totals = append(totals, v)
 		}
+
+		sort.Slice(classScores[c.ID], func(i, j int) bool {
+			return classScores[c.ID][i].Part > classScores[c.ID][j].Part
+		})
 
 		courseResults = append(courseResults, CourseResult{
-			Name:             course.Name,
-			Code:             course.Code,
+			Name:             c.Name,
+			Code:             c.Code,
 			TotalScore:       myTotalScore,
 			TotalScoreTScore: tScoreInt(myTotalScore, totals),
 			TotalScoreAvg:    averageInt(totals, 0),
 			TotalScoreMax:    maxInt(totals, 0),
 			TotalScoreMin:    minInt(totals, 0),
-			ClassScores:      classScores,
+			ClassScores:      classScores[c.ID],
 		})
 
 		// 自分のGPA計算
-		if course.Status == StatusClosed {
-			myGPA += float64(myTotalScore * int(course.Credit))
-			myCredits += int(course.Credit)
+		if c.Status == StatusClosed {
+			myGPA += float64(myTotalScore * int(c.Credit))
+			myCredits += int(c.Credit)
 		}
 	}
+
 	if myCredits > 0 {
 		myGPA = myGPA / 100 / float64(myCredits)
 	}
@@ -1213,6 +1244,13 @@ type Submission struct {
 	UserID   string `db:"user_id"`
 	UserCode string `db:"user_code"`
 	FileName string `db:"file_name"`
+}
+
+type Submission2 struct {
+	UserID   string        `db:"user_id"`
+	ClassID  string        `db:"class_id"`
+	FileName string        `db:"file_name"`
+	Score    sql.NullInt64 `db:"score"`
 }
 
 // DownloadSubmittedAssignments GET /api/courses/:courseID/classes/:classID/assignments/export 提出済みの課題ファイルをzip形式で一括ダウンロード

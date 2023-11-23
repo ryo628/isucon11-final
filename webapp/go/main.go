@@ -33,7 +33,8 @@ const (
 	mysqlErrNumDuplicateEntry = 1062
 
 	// Redisのkeyに付与するprefix
-	redisRedistrations = "REGISTRATIONS:"
+	redisRedistrations   = "REGISTRATIONS:"
+	redisSubmissionsFile = "SUBMISSIONS_FILE:"
 )
 
 var (
@@ -610,10 +611,12 @@ func (h *handlers) GetGrades(c echo.Context) error {
 		var myTotalScore int
 		for _, class := range classes {
 			var submissionsCount int
-			if err := h.DB.Get(&submissionsCount, "SELECT COUNT(*) FROM `submissions` WHERE `class_id` = ?", class.ID); err != nil {
+			toInt64, err := redisClient.Do(ctx, redisClient.B().Hlen().Key(redisSubmissionsFile+class.ID).Build()).ToInt64()
+			if err != nil {
 				c.Logger().Error(err)
 				return c.NoContent(http.StatusInternalServerError)
 			}
+			submissionsCount = int(toInt64)
 
 			var myScore sql.NullInt64
 			if err := h.DB.Get(&myScore, "SELECT `submissions`.`score` FROM `submissions` WHERE `user_id` = ? AND `class_id` = ?", userID, class.ID); err != nil && err != sql.ErrNoRows {
@@ -1148,7 +1151,20 @@ func (h *handlers) SubmitAssignment(c echo.Context) error {
 	}
 	defer file.Close()
 
-	if _, err := h.DB.Exec("INSERT INTO `submissions` (`user_id`, `class_id`, `file_name`) VALUES (?, ?, ?) ON DUPLICATE KEY UPDATE `file_name` = VALUES(`file_name`)", userID, classID, header.Filename); err != nil {
+	asBool, err = redisClient.Do(ctx, redisClient.B().Hexists().Key(redisSubmissionsFile+classID).Field(userID).Build()).AsBool()
+	if err != nil {
+		c.Logger().Error(err)
+		return c.NoContent(http.StatusInternalServerError)
+	}
+	if !asBool {
+		// XXX: JOINのために未提出か否かだけでも判定できるようにはしておく
+		if _, err := h.DB.Exec("INSERT INTO `submissions` (`user_id`, `class_id`, `file_name`) VALUES (?, ?, ?)", userID, classID, "DUMMY"); err != nil {
+			c.Logger().Error(err)
+			return c.NoContent(http.StatusInternalServerError)
+		}
+	}
+	err = redisClient.Do(ctx, redisClient.B().Hset().Key(redisSubmissionsFile+classID).FieldValue().FieldValue(userID, header.Filename).Build()).Error()
+	if err != nil {
 		c.Logger().Error(err)
 		return c.NoContent(http.StatusInternalServerError)
 	}
@@ -1242,6 +1258,15 @@ func (h *handlers) DownloadSubmittedAssignments(c echo.Context) error {
 	if err := h.DB.Select(&submissions, query, classID); err != nil {
 		c.Logger().Error(err)
 		return c.NoContent(http.StatusInternalServerError)
+	}
+
+	for i, v := range submissions {
+		toString, err := redisClient.Do(ctx, redisClient.B().Hget().Key(redisSubmissionsFile+classID).Field(v.UserID).Build()).ToString()
+		if err != nil {
+			c.Logger().Error(err)
+			return c.NoContent(http.StatusInternalServerError)
+		}
+		submissions[i].FileName = toString
 	}
 
 	if _, err := h.DB.Exec("UPDATE `classes` SET `submission_closed` = true WHERE `id` = ?", classID); err != nil {

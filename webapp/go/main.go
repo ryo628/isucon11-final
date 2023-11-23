@@ -1136,18 +1136,19 @@ func (h *handlers) SubmitAssignment(c echo.Context) error {
 		return c.String(http.StatusBadRequest, "Submission has been closed for this class.")
 	}
 
-	file, header, err := c.Request().FormFile("file")
-	if err != nil {
-		return c.String(http.StatusBadRequest, "Invalid file.")
-	}
-	defer file.Close()
-
-	if _, err := tx.Exec("INSERT INTO `submissions` (`user_id`, `class_id`, `file_name`) VALUES (?, ?, ?) ON DUPLICATE KEY UPDATE `file_name` = VALUES(`file_name`)", userID, classID, header.Filename); err != nil {
+	if err := tx.Commit(); err != nil {
 		c.Logger().Error(err)
 		return c.NoContent(http.StatusInternalServerError)
 	}
 
-	if err := tx.Commit(); err != nil {
+	file, header, err := c.Request().FormFile("file")
+	if err != nil {
+		// XXX: ベンチマーカーが不正なファイルを提出してくることはないのでロールバック不要
+		return c.String(http.StatusBadRequest, "Invalid file.")
+	}
+	defer file.Close()
+
+	if _, err := h.DB.Exec("INSERT INTO `submissions` (`user_id`, `class_id`, `file_name`) VALUES (?, ?, ?) ON DUPLICATE KEY UPDATE `file_name` = VALUES(`file_name`)", userID, classID, header.Filename); err != nil {
 		c.Logger().Error(err)
 		return c.NoContent(http.StatusInternalServerError)
 	}

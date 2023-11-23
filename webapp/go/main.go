@@ -1147,6 +1147,11 @@ func (h *handlers) SubmitAssignment(c echo.Context) error {
 		return c.NoContent(http.StatusInternalServerError)
 	}
 
+	if err := tx.Commit(); err != nil {
+		c.Logger().Error(err)
+		return c.NoContent(http.StatusInternalServerError)
+	}
+
 	data, err := io.ReadAll(file)
 	if err != nil {
 		c.Logger().Error(err)
@@ -1155,11 +1160,6 @@ func (h *handlers) SubmitAssignment(c echo.Context) error {
 
 	dst := AssignmentsDirectory + classID + "-" + userID + ".pdf"
 	if err := os.WriteFile(dst, data, 0666); err != nil {
-		c.Logger().Error(err)
-		return c.NoContent(http.StatusInternalServerError)
-	}
-
-	if err := tx.Commit(); err != nil {
 		c.Logger().Error(err)
 		return c.NoContent(http.StatusInternalServerError)
 	}

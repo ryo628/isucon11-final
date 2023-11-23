@@ -634,6 +634,7 @@ func (h *handlers) GetGrades(c echo.Context) error {
 			return c.NoContent(http.StatusInternalServerError)
 		}
 
+		classTotalScores := make([]map[string]string, 0, len(classes))
 		// 講義毎の成績計算処理
 		classScores := make([]ClassScore, 0, len(classes))
 		var myTotalScore int
@@ -654,7 +655,6 @@ func (h *handlers) GetGrades(c echo.Context) error {
 			message, err := redisClient.Do(ctx, redisClient.B().Hget().Key(redisSubmissionsScore+class.ID).Field(userCode).Build()).ToMessage()
 			if err != nil {
 				if message.IsNil() {
-					c.Logger().Error("nil message")
 					classScores = append(classScores, ClassScore{
 						ClassID:    class.ID,
 						Part:       class.Part,
@@ -667,9 +667,13 @@ func (h *handlers) GetGrades(c echo.Context) error {
 					return c.NoContent(http.StatusInternalServerError)
 				}
 			} else {
-				asInt64, err := message.AsInt64()
+				toString, err := message.ToString()
 				if err != nil {
-					// nilと同様の処理を行うためにコピペ
+					c.Logger().Error(err)
+					return c.NoContent(http.StatusInternalServerError)
+				}
+				if toString == "null" {
+					// null登録のスコア（初期値）も同様にnil
 					classScores = append(classScores, ClassScore{
 						ClassID:    class.ID,
 						Part:       class.Part,
@@ -678,32 +682,59 @@ func (h *handlers) GetGrades(c echo.Context) error {
 						Submitters: submissionsCount,
 					})
 				} else {
-					score := int(asInt64)
-					myTotalScore += score
-					classScores = append(classScores, ClassScore{
-						ClassID:    class.ID,
-						Part:       class.Part,
-						Title:      class.Title,
-						Score:      &score,
-						Submitters: submissionsCount,
-					})
+					asInt64, err := message.AsInt64()
+					if err != nil {
+						// // nilと同様の処理を行うためにコピペ
+						// classScores = append(classScores, ClassScore{
+						// 	ClassID:    class.ID,
+						// 	Part:       class.Part,
+						// 	Title:      class.Title,
+						// 	Score:      nil,
+						// 	Submitters: submissionsCount,
+						// })
+						c.Logger().Error("Nil 同様のやつ")
+					} else {
+						score := int(asInt64)
+						myTotalScore += score
+						classScores = append(classScores, ClassScore{
+							ClassID:    class.ID,
+							Part:       class.Part,
+							Title:      class.Title,
+							Score:      &score,
+							Submitters: submissionsCount,
+						})
+					}
+				}
+			}
+
+			asStrMap, err := redisClient.Do(ctx, redisClient.B().Hgetall().Key(redisSubmissionsScore+class.ID).Build()).AsStrMap()
+			if err != nil {
+				c.Logger().Error(err)
+				return c.NoContent(http.StatusInternalServerError)
+			}
+			classTotalScores = append(classTotalScores, asStrMap)
+		}
+
+		tmpMergedScores := map[string]int{}
+
+		for _, classScoreMap := range classTotalScores {
+			for userCode, scoreStr := range classScoreMap {
+				if scoreStr == "null" {
+					tmpMergedScores[userCode] += 0
+				} else {
+					score, err := strconv.Atoi(scoreStr)
+					if err != nil {
+						c.Logger().Error(err)
+						return c.NoContent(http.StatusInternalServerError)
+					}
+					tmpMergedScores[userCode] += score
 				}
 			}
 		}
-
-		// この科目を履修している学生のTotalScore一覧を取得
 		var totals []int
-		query := "SELECT IFNULL(SUM(`submissions`.`score`), 0) AS `total_score`" +
-			" FROM `users`" +
-			" JOIN `registrations` ON `users`.`id` = `registrations`.`user_id`" +
-			" JOIN `courses` ON `registrations`.`course_id` = `courses`.`id`" +
-			" LEFT JOIN `classes` ON `courses`.`id` = `classes`.`course_id`" +
-			" LEFT JOIN `submissions` ON `users`.`id` = `submissions`.`user_id` AND `submissions`.`class_id` = `classes`.`id`" +
-			" WHERE `courses`.`id` = ?" +
-			" GROUP BY `users`.`id`"
-		if err := h.DB.Select(&totals, query, course.ID); err != nil {
-			c.Logger().Error(err)
-			return c.NoContent(http.StatusInternalServerError)
+		for _, v := range tmpMergedScores {
+			// この科目を履修している学生のTotalScore一覧を取得
+			totals = append(totals, v)
 		}
 
 		courseResults = append(courseResults, CourseResult{
@@ -1208,10 +1239,22 @@ func (h *handlers) SubmitAssignment(c echo.Context) error {
 		// XXX: JOINのために未提出か否かだけでも判定できるようにはしておく
 		if _, err := h.DB.Exec("INSERT INTO `submissions` (`user_id`, `class_id`, `file_name`) VALUES (?, ?, ?)", userID, classID, "DUMMY"); err != nil {
 			c.Logger().Error(err)
-			return c.NoContent(http.StatusInternalServerError)
+			// return c.NoContent(http.StatusInternalServerError)
 		}
 	}
 	err = redisClient.Do(ctx, redisClient.B().Hset().Key(redisSubmissionsFile+classID).FieldValue().FieldValue(userID, header.Filename).Build()).Error()
+	if err != nil {
+		c.Logger().Error(err)
+		return c.NoContent(http.StatusInternalServerError)
+	}
+
+	userCode, err := redisClient.Do(ctx, redisClient.B().Get().Key(redisUserIDtoCode+userID).Build()).ToString()
+	if err != nil {
+		c.Logger().Error(err)
+		return c.NoContent(http.StatusInternalServerError)
+	}
+	// 未評価のスコアはnilとなっている挙動をゼロで擬似的に再現
+	err = redisClient.Do(ctx, redisClient.B().Hset().Key(redisSubmissionsScore+classID).FieldValue().FieldValue(userCode, "null").Build()).Error()
 	if err != nil {
 		c.Logger().Error(err)
 		return c.NoContent(http.StatusInternalServerError)
@@ -1442,7 +1485,6 @@ func (h *handlers) GetAnnouncementList(c echo.Context) error {
 
 	var unreadCount int
 	unreadCount = int(unreadCountInt64)
-	c.Logger().Warn("!!!!!!!!!!!!", unreadCount, unreadCountInt64)
 
 	var announcements []AnnouncementWithoutDetail
 	for i, _ := range announcementsWithoutUnread {

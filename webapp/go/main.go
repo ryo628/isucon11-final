@@ -1218,17 +1218,29 @@ func (h *handlers) SubmitAssignment(c echo.Context) error {
 		return c.String(http.StatusBadRequest, "Submission has been closed for this class.")
 	}
 
-	if err := tx.Commit(); err != nil {
-		c.Logger().Error(err)
-		return c.NoContent(http.StatusInternalServerError)
-	}
-
 	file, header, err := c.Request().FormFile("file")
 	if err != nil {
 		// XXX: ベンチマーカーが不正なファイルを提出してくることはないのでロールバック不要
 		return c.String(http.StatusBadRequest, "Invalid file.")
 	}
 	defer file.Close()
+
+	data, err := io.ReadAll(file)
+	if err != nil {
+		c.Logger().Error(err)
+		return c.NoContent(http.StatusInternalServerError)
+	}
+
+	dst := AssignmentsDirectory + classID + "-" + userID + ".pdf"
+	if err := os.WriteFile(dst, data, 0666); err != nil {
+		c.Logger().Error(err)
+		return c.NoContent(http.StatusInternalServerError)
+	}
+
+	if err := tx.Commit(); err != nil {
+		c.Logger().Error(err)
+		return c.NoContent(http.StatusInternalServerError)
+	}
 
 	asBool, err = redisClient.Do(ctx, redisClient.B().Hexists().Key(redisSubmissionsFile+classID).Field(userID).Build()).AsBool()
 	if err != nil {
@@ -1256,18 +1268,6 @@ func (h *handlers) SubmitAssignment(c echo.Context) error {
 	// 未評価のスコアはnilとなっている挙動をゼロで擬似的に再現
 	err = redisClient.Do(ctx, redisClient.B().Hset().Key(redisSubmissionsScore+classID).FieldValue().FieldValue(userCode, "null").Build()).Error()
 	if err != nil {
-		c.Logger().Error(err)
-		return c.NoContent(http.StatusInternalServerError)
-	}
-
-	data, err := io.ReadAll(file)
-	if err != nil {
-		c.Logger().Error(err)
-		return c.NoContent(http.StatusInternalServerError)
-	}
-
-	dst := AssignmentsDirectory + classID + "-" + userID + ".pdf"
-	if err := os.WriteFile(dst, data, 0666); err != nil {
 		c.Logger().Error(err)
 		return c.NoContent(http.StatusInternalServerError)
 	}

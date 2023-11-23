@@ -6,7 +6,7 @@ import (
 	"errors"
 	"fmt"
 	echopprof "github.com/plainbanana/echo-pprof"
-	"github.com/redis/go-redis/v9"
+	"github.com/redis/rueidis"
 	"io"
 	"net/http"
 	"net/url"
@@ -34,11 +34,7 @@ const (
 )
 
 var (
-	redisClient = redis.NewClient(&redis.Options{
-		Addr:     "localhost:6379",
-		Password: "", // no password set
-		DB:       0,  // use default DB
-	})
+	redisClient, _ = rueidis.NewClient(rueidis.ClientOption{InitAddress: []string{"127.0.0.1:6379"}})
 )
 
 var ctx = context.Background()
@@ -137,7 +133,11 @@ func (h *handlers) Initialize(c echo.Context) error {
 		return c.NoContent(http.StatusInternalServerError)
 	}
 
-	redisClient.FlushAll(ctx)
+	err := redisClient.Do(ctx, redisClient.B().Flushall().Build()).Error()
+	if err != nil {
+		c.Logger().Error(err)
+		return c.NoContent(http.StatusInternalServerError)
+	}
 
 	if err := exec.Command(
 		"rm",
@@ -1112,7 +1112,7 @@ func (h *handlers) SubmitAssignment(c echo.Context) error {
 	}
 
 	var registrationCount int
-	if err := tx.Get(&registrationCount, "SELECT COUNT(*) FROM `registrations` WHERE `user_id` = ? AND `course_id` = ?", userID, courseID); err != nil {
+	if err := tx.Get(&registrationCount, "SELECT COUNT(1) FROM `registrations` WHERE `user_id` = ? AND `course_id` = ?", userID, courseID); err != nil {
 		c.Logger().Error(err)
 		return c.NoContent(http.StatusInternalServerError)
 	}
@@ -1344,7 +1344,7 @@ func (h *handlers) GetAnnouncementList(c echo.Context) error {
 	}
 
 	var unreadCountInt64 int64
-	unreadCountInt64, _ = redisClient.SCard(ctx, userID).Result()
+	unreadCountInt64, _ = redisClient.Do(ctx, redisClient.B().Scard().Key(userID).Build()).ToInt64()
 
 	var unreadCount int
 	unreadCount = int(unreadCountInt64)
@@ -1358,7 +1358,7 @@ func (h *handlers) GetAnnouncementList(c echo.Context) error {
 		tmp.ID = announcementsWithoutUnread[i].ID
 		tmp.Title = announcementsWithoutUnread[i].Title
 
-		isUnread, _ := redisClient.SIsMember(ctx, userID, tmp.ID).Result()
+		isUnread, _ := redisClient.Do(ctx, redisClient.B().Sismember().Key(userID).Member(tmp.ID).Build()).AsBool()
 		tmp.Unread = isUnread
 		announcements = append(announcements, tmp)
 	}
@@ -1464,7 +1464,7 @@ func (h *handlers) AddAnnouncement(c echo.Context) error {
 
 	for _, user := range targets {
 		// 未読を追加
-		result, err := redisClient.SAdd(ctx, user.ID, req.ID).Result()
+		result, err := redisClient.Do(ctx, redisClient.B().Sadd().Key(user.ID).Member(req.ID).Build()).ToInt64()
 		if err != nil {
 			c.Logger().Warn("!!!!!!UNREAD ADD", result, err)
 		}
@@ -1540,7 +1540,7 @@ func (h *handlers) GetAnnouncementDetail(c echo.Context) error {
 	announcement.Message = announcementWithoutUnread.Message
 	announcement.Title = announcementWithoutUnread.Title
 	// 既読になるので削除
-	isUnread, _ := redisClient.SRem(ctx, userID, announcementID).Result()
+	isUnread, _ := redisClient.Do(ctx, redisClient.B().Srem().Key(userID).Member(announcementID).Build()).ToInt64()
 	if isUnread == 1 {
 		// 削除に成功するのは未読であった場合のみ
 		announcement.Unread = true

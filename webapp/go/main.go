@@ -646,28 +646,48 @@ func (h *handlers) GetGrades(c echo.Context) error {
 			}
 			submissionsCount = int(toInt64)
 
-			var myScore sql.NullInt64
-			if err := h.DB.Get(&myScore, "SELECT `submissions`.`score` FROM `submissions` WHERE `user_id` = ? AND `class_id` = ?", userID, class.ID); err != nil && err != sql.ErrNoRows {
+			userCode, err := redisClient.Do(ctx, redisClient.B().Get().Key(redisUserIDtoCode+userID).Build()).ToString()
+			if err != nil {
 				c.Logger().Error(err)
 				return c.NoContent(http.StatusInternalServerError)
-			} else if err == sql.ErrNoRows || !myScore.Valid {
-				classScores = append(classScores, ClassScore{
-					ClassID:    class.ID,
-					Part:       class.Part,
-					Title:      class.Title,
-					Score:      nil,
-					Submitters: submissionsCount,
-				})
+			}
+			message, err := redisClient.Do(ctx, redisClient.B().Hget().Key(redisSubmissionsScore+class.ID).Field(userCode).Build()).ToMessage()
+			if err != nil {
+				if message.IsNil() {
+					c.Logger().Error("nil message")
+					classScores = append(classScores, ClassScore{
+						ClassID:    class.ID,
+						Part:       class.Part,
+						Title:      class.Title,
+						Score:      nil,
+						Submitters: submissionsCount,
+					})
+				} else {
+					c.Logger().Error(err)
+					return c.NoContent(http.StatusInternalServerError)
+				}
 			} else {
-				score := int(myScore.Int64)
-				myTotalScore += score
-				classScores = append(classScores, ClassScore{
-					ClassID:    class.ID,
-					Part:       class.Part,
-					Title:      class.Title,
-					Score:      &score,
-					Submitters: submissionsCount,
-				})
+				asInt64, err := message.AsInt64()
+				if err != nil {
+					// nilと同様の処理を行うためにコピペ
+					classScores = append(classScores, ClassScore{
+						ClassID:    class.ID,
+						Part:       class.Part,
+						Title:      class.Title,
+						Score:      nil,
+						Submitters: submissionsCount,
+					})
+				} else {
+					score := int(asInt64)
+					myTotalScore += score
+					classScores = append(classScores, ClassScore{
+						ClassID:    class.ID,
+						Part:       class.Part,
+						Title:      class.Title,
+						Score:      &score,
+						Submitters: submissionsCount,
+					})
+				}
 			}
 		}
 
@@ -1250,7 +1270,8 @@ func (h *handlers) RegisterScores(c echo.Context) error {
 			c.Logger().Error(err)
 			return c.NoContent(http.StatusInternalServerError)
 		}
-		err := redisClient.Do(ctx, redisClient.B().Zadd().Key(redisSubmissionsScore+classID).ScoreMember().ScoreMember(float64(score.Score), score.UserCode).Build()).Error()
+		// err := redisClient.Do(ctx, redisClient.B().Zadd().Key(redisSubmissionsScore+classID).ScoreMember().ScoreMember(float64(score.Score), score.UserCode).Build()).Error()
+		err := redisClient.Do(ctx, redisClient.B().Hset().Key(redisSubmissionsScore+classID).FieldValue().FieldValue(score.UserCode, strconv.Itoa(score.Score)).Build()).Error()
 		if err != nil {
 			c.Logger().Error(err)
 			return c.NoContent(http.StatusInternalServerError)

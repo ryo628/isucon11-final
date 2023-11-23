@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"database/sql"
+	"encoding/csv"
 	"errors"
 	"fmt"
 	echopprof "github.com/plainbanana/echo-pprof"
@@ -33,8 +34,10 @@ const (
 	mysqlErrNumDuplicateEntry = 1062
 
 	// Redisのkeyに付与するprefix
-	redisRedistrations   = "REGISTRATIONS:"
-	redisSubmissionsFile = "SUBMISSIONS_FILE:"
+	redisRedistrations    = "REGISTRATIONS:"
+	redisSubmissionsFile  = "SUBMISSIONS_FILE:"
+	redisSubmissionsScore = "SUBMISSIONS_SCORE:"
+	redisUserIDtoCode     = "USERIDCODE:"
 )
 
 var (
@@ -148,6 +151,31 @@ func (h *handlers) Initialize(c echo.Context) error {
 		"-rf /dev/shm/tmp",
 	).Run(); err != nil {
 		c.Logger().Warn("!!!  rm /dev/shm", err)
+	}
+
+	// usersのIDとcodeをマップする箇所だけredisでもっておく。便利なので。
+	file, err := os.Open(SQLDirectory + "users.csv")
+	if err != nil {
+		c.Logger().Error(err)
+		return c.NoContent(http.StatusInternalServerError)
+	}
+	defer func(file *os.File) {
+		err := file.Close()
+		if err != nil {
+
+		}
+	}(file)
+
+	r := csv.NewReader(file)
+	rows, err := r.ReadAll() // csvを一度に全て読み込む
+	if err != nil {
+		c.Logger().Error(err)
+	}
+	for _, v := range rows {
+		err := redisClient.Do(ctx, redisClient.B().Set().Key(redisUserIDtoCode+v[0]).Value(v[1]).Build()).Error()
+		if err != nil {
+			c.Logger().Error(err)
+		}
 	}
 
 	res := InitializeResponse{
@@ -1222,6 +1250,11 @@ func (h *handlers) RegisterScores(c echo.Context) error {
 			c.Logger().Error(err)
 			return c.NoContent(http.StatusInternalServerError)
 		}
+		err := redisClient.Do(ctx, redisClient.B().Zadd().Key(redisSubmissionsScore+classID).ScoreMember().ScoreMember(float64(score.Score), score.UserCode).Build()).Error()
+		if err != nil {
+			c.Logger().Error(err)
+			return c.NoContent(http.StatusInternalServerError)
+		}
 	}
 
 	if err := tx.Commit(); err != nil {
@@ -1251,13 +1284,22 @@ func (h *handlers) DownloadSubmittedAssignments(c echo.Context) error {
 		return c.String(http.StatusNotFound, "No such class.")
 	}
 	var submissions []Submission
-	query := "SELECT `submissions`.`user_id`, `submissions`.`file_name`, `users`.`code` AS `user_code`" +
-		" FROM `submissions`" +
-		" JOIN `users` ON `users`.`id` = `submissions`.`user_id`" +
-		" WHERE `class_id` = ?"
-	if err := h.DB.Select(&submissions, query, classID); err != nil {
+	asStrMap, err := redisClient.Do(ctx, redisClient.B().Hgetall().Key(redisSubmissionsFile+classID).Build()).AsStrMap()
+	if err != nil {
 		c.Logger().Error(err)
 		return c.NoContent(http.StatusInternalServerError)
+	}
+	for userID, fileName := range asStrMap {
+		userCODE, err := redisClient.Do(ctx, redisClient.B().Get().Key(redisUserIDtoCode+userID).Build()).ToString()
+		if err != nil {
+			c.Logger().Error(err)
+			return c.NoContent(http.StatusInternalServerError)
+		}
+		var submit Submission
+		submit.UserID = userID
+		submit.UserCode = userCODE
+		submit.FileName = fileName
+		submissions = append(submissions, submit)
 	}
 
 	for i, v := range submissions {

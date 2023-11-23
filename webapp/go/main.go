@@ -31,6 +31,9 @@ const (
 	InitDataDirectory         = "../data/"
 	SessionName               = "isucholar_go"
 	mysqlErrNumDuplicateEntry = 1062
+
+	// Redisのkeyに付与するprefix
+	redisRedistrations = "REGISTRATIONS:"
 )
 
 var (
@@ -470,12 +473,11 @@ func (h *handlers) RegisterCourses(c echo.Context) error {
 		}
 
 		// すでに履修登録済みの科目は無視する
-		var count int
-		if err := tx.Get(&count, "SELECT COUNT(*) FROM `registrations` WHERE `course_id` = ? AND `user_id` = ?", course.ID, userID); err != nil {
+		asBool, err := redisClient.Do(ctx, redisClient.B().Sismember().Key(redisRedistrations+course.ID).Member(userID).Build()).AsBool()
+		if err != nil {
 			c.Logger().Error(err)
-			return c.NoContent(http.StatusInternalServerError)
 		}
-		if count > 0 {
+		if asBool {
 			continue
 		}
 
@@ -511,6 +513,10 @@ func (h *handlers) RegisterCourses(c echo.Context) error {
 		if err != nil {
 			c.Logger().Error(err)
 			return c.NoContent(http.StatusInternalServerError)
+		}
+		err := redisClient.Do(ctx, redisClient.B().Sadd().Key(redisRedistrations+course.ID).Member(userID).Build()).Error()
+		if err != nil {
+			c.Logger().Error(err)
 		}
 	}
 
@@ -1111,12 +1117,11 @@ func (h *handlers) SubmitAssignment(c echo.Context) error {
 		return c.String(http.StatusBadRequest, "This course is not in progress.")
 	}
 
-	var registrationCount int
-	if err := tx.Get(&registrationCount, "SELECT COUNT(1) FROM `registrations` WHERE `user_id` = ? AND `course_id` = ?", userID, courseID); err != nil {
+	asBool, err := redisClient.Do(ctx, redisClient.B().Sismember().Key(redisRedistrations+courseID).Member(userID).Build()).AsBool()
+	if err != nil {
 		c.Logger().Error(err)
-		return c.NoContent(http.StatusInternalServerError)
 	}
-	if registrationCount == 0 {
+	if asBool == false {
 		return c.String(http.StatusBadRequest, "You have not taken this course.")
 	}
 
@@ -1524,12 +1529,11 @@ func (h *handlers) GetAnnouncementDetail(c echo.Context) error {
 		return c.String(http.StatusNotFound, "No such announcement.")
 	}
 
-	var registrationCount int
-	if err := tx.Get(&registrationCount, "SELECT COUNT(*) FROM `registrations` WHERE `course_id` = ? AND `user_id` = ?", announcementWithoutUnread.CourseID, userID); err != nil {
+	asBool, err := redisClient.Do(ctx, redisClient.B().Sismember().Key(redisRedistrations+announcementWithoutUnread.CourseID).Member(userID).Build()).AsBool()
+	if err != nil {
 		c.Logger().Error(err)
-		return c.NoContent(http.StatusInternalServerError)
 	}
-	if registrationCount == 0 {
+	if asBool == false {
 		return c.String(http.StatusNotFound, "No such announcement.")
 	}
 

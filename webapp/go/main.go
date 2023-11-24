@@ -684,15 +684,7 @@ func (h *handlers) GetGrades(c echo.Context) error {
 				} else {
 					asInt64, err := message.AsInt64()
 					if err != nil {
-						// // nilと同様の処理を行うためにコピペ
-						// classScores = append(classScores, ClassScore{
-						// 	ClassID:    class.ID,
-						// 	Part:       class.Part,
-						// 	Title:      class.Title,
-						// 	Score:      nil,
-						// 	Submitters: submissionsCount,
-						// })
-						// c.Logger().Error("Nil 同様のやつ")
+						// nullが格納されている場合は当然エラーになるが当たり前なので無視
 					} else {
 						score := int(asInt64)
 						myTotalScore += score

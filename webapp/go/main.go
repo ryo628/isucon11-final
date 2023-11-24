@@ -692,7 +692,7 @@ func (h *handlers) GetGrades(c echo.Context) error {
 						// 	Score:      nil,
 						// 	Submitters: submissionsCount,
 						// })
-						c.Logger().Error("Nil 同様のやつ")
+						// c.Logger().Error("Nil 同様のやつ")
 					} else {
 						score := int(asInt64)
 						myTotalScore += score
@@ -716,11 +716,13 @@ func (h *handlers) GetGrades(c echo.Context) error {
 		}
 
 		tmpMergedScores := map[string]int{}
-
 		for _, classScoreMap := range classTotalScores {
 			for userCode, scoreStr := range classScoreMap {
 				if scoreStr == "null" {
-					tmpMergedScores[userCode] += 0
+					if _, ok := tmpMergedScores[userCode]; !ok {
+						// 提出した課題が未採点の場合は0点換算
+						tmpMergedScores[userCode] = 0
+					}
 				} else {
 					score, err := strconv.Atoi(scoreStr)
 					if err != nil {
@@ -735,6 +737,15 @@ func (h *handlers) GetGrades(c echo.Context) error {
 		for _, v := range tmpMergedScores {
 			// この科目を履修している学生のTotalScore一覧を取得
 			totals = append(totals, v)
+		}
+
+		courseRegisterdNum, err := redisClient.Do(ctx, redisClient.B().Scard().Key(redisRedistrations+course.ID).Build()).AsInt64()
+		if err != nil {
+			c.Logger().Error(err)
+		}
+		for i := len(totals); i < int(courseRegisterdNum); i++ {
+			// 課題を未提出な学生は0点換算
+			totals = append(totals, 0)
 		}
 
 		courseResults = append(courseResults, CourseResult{
